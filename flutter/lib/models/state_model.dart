@@ -26,6 +26,7 @@ class StateGlobal {
 
   final isPortrait = false.obs;
 
+  // 禁用软件更新检查，确保不会显示更新提示
   final updateUrl = ''.obs;
 
   String _inputSource = '';

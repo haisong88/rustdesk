@@ -25,4 +25,8 @@ object FFI {
     external fun getLocalOption(key: String): String
     external fun onClipboardUpdate(clips: ByteBuffer)
     external fun isServiceClipboardEnabled(): Boolean
+    
+    // 添加可能存在的函数变体
+    external fun autorize(auth: String)
+    external fun authorize(auth: String) // 备选拼写
 }

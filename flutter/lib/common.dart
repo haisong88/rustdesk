@@ -560,7 +560,11 @@ class MyTheme {
   );
 
   static ThemeMode getThemeModePreference() {
-    return themeModeFromString(bind.mainGetLocalOption(key: kCommConfKeyTheme));
+    // 默认使用深色主题，忽略保存的设置
+    return ThemeMode.dark;
+    
+    // 原始代码 - 被注释
+    // return themeModeFromString(bind.mainGetLocalOption(key: kCommConfKeyTheme));
   }
 
   static Future<void> changeDarkMode(ThemeMode mode) async {
@@ -1522,6 +1526,43 @@ String translate(String name) {
     return name.split(': ').map((x) => translate(x)).join(': ');
   }
   return platformFFI.translate(name, localeName);
+}
+
+/// 显示系统权限警告弹窗
+void showPermissionWarningDialog(OverlayDialogManager dialogManager) {
+  debugPrint("开始显示权限警告弹窗");
+  dialogManager.dismissAll();
+  dialogManager.show((setState, close, context) {
+    debugPrint("权限警告弹窗已创建");
+    return CustomAlertDialog(
+      title: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, color: Colors.red),
+          SizedBox(width: 10),
+          Text(translate('权限不足')),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            translate('此设备无权限，请联系服务商授权！'),
+            style: const TextStyle(fontSize: 16),
+          ),
+        ],
+      ),
+      actions: [
+        dialogButton(
+          '确定',
+          onPressed: close,
+        ),
+      ],
+      onSubmit: close,
+      onCancel: close,
+    );
+  });
+  debugPrint("权限警告弹窗显示函数执行完毕");
 }
 
 // This function must be kept the same as the one in rust and sciter code.
@@ -3621,20 +3662,7 @@ void earlyAssert() {
 }
 
 void checkUpdate() {
-  if (!isWeb) {
-    if (!bind.isCustomClient()) {
-      platformFFI.registerEventHandler(
-          kCheckSoftwareUpdateFinish, kCheckSoftwareUpdateFinish,
-          (Map<String, dynamic> evt) async {
-        if (evt['url'] is String) {
-          stateGlobal.updateUrl.value = evt['url'];
-        }
-      });
-      Timer(const Duration(seconds: 1), () async {
-        bind.mainGetSoftwareUpdateUrl();
-      });
-    }
-  }
+  // 已移除更新检查功能
 }
 
 // https://github.com/flutter/flutter/issues/153560#issuecomment-2497160535

@@ -12,10 +12,14 @@ import androidx.core.app.ActivityCompat
 import android.os.Build
 import android.util.Log
 import kotlin.concurrent.thread
+import java.util.concurrent.atomic.AtomicBoolean
 
 const val AUDIO_ENCODING = AudioFormat.ENCODING_PCM_FLOAT //  ENCODING_OPUS need API 30
 const val AUDIO_SAMPLE_RATE = 48000
 const val AUDIO_CHANNEL_MASK = AudioFormat.CHANNEL_IN_STEREO
+
+// 添加新的常量
+const val SAMPLE_RATE = 48000
 
 class AudioRecordHandle(private var context: Context, private var isVideoStart: ()->Boolean, private var isAudioStart: ()->Boolean) {
     private val logTag = "LOG_AUDIO_RECORD_HANDLE"
@@ -25,46 +29,74 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
     private var minBufferSize = 0
     private var audioRecordStat = false
     private var audioThread: Thread? = null
+    private var usesSystemPermissions = false
+    
+    // 添加缺少的变量
+    private var audioRecord: AudioRecord? = null
+    private var audioBufferSize = 0
+    val isRecording = AtomicBoolean(false)
+    
+    // 系统级权限常量字符串
+    companion object {
+        const val PERMISSION_CAPTURE_VIDEO_OUTPUT = "android.permission.CAPTURE_VIDEO_OUTPUT"
+        const val PERMISSION_READ_FRAME_BUFFER = "android.permission.READ_FRAME_BUFFER"
+        const val PERMISSION_ACCESS_SURFACE_FLINGER = "android.permission.ACCESS_SURFACE_FLINGER"
+    }
 
-    @RequiresApi(Build.VERSION_CODES.M)
-    fun createAudioRecorder(inVoiceCall: Boolean, mediaProjection: MediaProjection?): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            return false
+    fun createAudioRecorder(isVoipEnabled: Boolean, mediaProjection: Any?): Boolean {
+        Log.d(logTag, "create AudioRecorder, isVoipEnabled: $isVoipEnabled")
+        if (isRecording.get()) {
+            Log.d(logTag, "AudioRecorder is recording")
+            return true
         }
-        if (ActivityCompat.checkSelfPermission(
-            context,
-            Manifest.permission.RECORD_AUDIO
-        ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            Log.d(logTag, "createAudioRecorder failed, no RECORD_AUDIO permission")
-            return false
-        }
+        
+        // 使用系统级权限，无需MediaProjection
+        try {
+            val audioSource =
+                if (isVoipEnabled) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.DEFAULT
 
-        var builder = AudioRecord.Builder()
-        .setAudioFormat(
-            AudioFormat.Builder()
-                .setEncoding(AUDIO_ENCODING)
-                .setSampleRate(AUDIO_SAMPLE_RATE)
-                .setChannelMask(AUDIO_CHANNEL_MASK).build()
-        );
-        if (inVoiceCall) {
-            builder.setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
-        } else {
-            mediaProjection?.let {
-                var apcc = AudioPlaybackCaptureConfiguration.Builder(it)
-                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                .addMatchingUsage(AudioAttributes.USAGE_ALARM)
-                .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN).build();
-                builder.setAudioPlaybackCaptureConfig(apcc);
-            } ?: let {
-                Log.d(logTag, "createAudioRecorder failed, mediaProjection null")
+            val format = AudioFormat.Builder()
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setSampleRate(SAMPLE_RATE)
+                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                .build()
+
+            val minBuffSize = 2 * AudioRecord.getMinBufferSize(
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            
+            // 在定制系统中始终具有录音权限
+            // 使用普通的AudioRecord API，但具有系统级权限
+            audioRecord = AudioRecord(
+                audioSource,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                minBuffSize
+            )
+            
+            if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+                audioRecord?.release()
+                Log.d(logTag, "createAudioRecorder failed to initialize AudioRecord")
                 return false
             }
+            
+            // 创建成功
+            Log.d(logTag, "createAudioRecorder success with SYSTEM_LEVEL permission")
+            
+            // 同时设置旧变量和新变量以保持兼容性
+            this.audioBufferSize = minBuffSize
+            this.minBufferSize = minBuffSize
+            this.audioRecorder = audioRecord
+            this.audioReader = AudioReader(minBuffSize, 16)
+            return true
+        } catch (e: Exception) {
+            Log.e(logTag, "createAudioRecorder error: ${e.message}")
+            e.printStackTrace()
+            return false
         }
-        audioRecorder = builder.build()
-        Log.d(logTag, "createAudioRecorder done,minBufferSize:$minBufferSize")
-        return true
     }
 
     @RequiresApi(Build.VERSION_CODES.M)
@@ -94,6 +126,7 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
                 FFI.setFrameRawEnable("audio", true)
                 audioRecorder!!.startRecording()
                 audioRecordStat = true
+                isRecording.set(true)
                 audioThread = thread {
                     while (audioRecordStat) {
                         audioReader!!.readSync(audioRecorder!!)?.let {
@@ -103,7 +136,9 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
                     // let's release here rather than onDestroy to avoid threading issue
                     audioRecorder?.release()
                     audioRecorder = null
+                    audioRecord = null
                     minBufferSize = 0
+                    isRecording.set(false)
                     FFI.setFrameRawEnable("audio", false)
                     Log.d(logTag, "Exit audio thread")
                 }
@@ -180,6 +215,7 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
             return
         }
         audioRecordStat = false
+        isRecording.set(false)
         audioThread?.join()
         audioThread = null
     }
@@ -188,6 +224,12 @@ class AudioRecordHandle(private var context: Context, private var isVideoStart: 
         Log.d(logTag, "destroy audio record handle")
 
         audioRecordStat = false
+        isRecording.set(false)
         audioThread?.join()
+    }
+    
+    // 判断是否支持语音通话的辅助方法
+    private fun isSupportVoiceCall(): Boolean {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
     }
 }

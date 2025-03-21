@@ -30,7 +30,7 @@ class HomePageState extends State<HomePage> {
   final List<PageShape> _pages = [];
   int _chatPageTabIndex = -1;
   bool get isChatPageCurrentTab => isAndroid
-      ? _selectedIndex == _chatPageTabIndex
+      ? _selectedIndex == _chatPageTabIndex && _chatPageTabIndex >= 0
       : false; // change this when ios have chat page
 
   void refreshPages() {
@@ -42,20 +42,32 @@ class HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _selectedIndex = 0; // 确保始终从远程协助页面启动
     initPages();
   }
 
   void initPages() {
     _pages.clear();
+    
+    // 1. 服务页面（如果是安卓且不是仅出站模式）
+    if (isAndroid && !bind.isOutgoingOnly()) {
+      _pages.add(ServerPage());
+    }
+    
+    // 2. 连接页面（如果不是仅入站模式）
     if (!bind.isIncomingOnly()) {
       _pages.add(ConnectionPage(
         appBarActions: [],
       ));
     }
+    
+    // 3. 聊天页面（如果是安卓且不是仅出站模式）
     if (isAndroid && !bind.isOutgoingOnly()) {
       _chatPageTabIndex = _pages.length;
-      _pages.addAll([ChatPage(type: ChatPageType.mobileMain), ServerPage()]);
+      _pages.add(ChatPage(type: ChatPageType.mobileMain));
     }
+    
+    // 4. 设置页面（总是添加）
     _pages.add(SettingsPage());
   }
 
@@ -77,30 +89,27 @@ class HomePageState extends State<HomePage> {
           appBar: AppBar(
             centerTitle: true,
             title: Text("赢商动力"),
-            actions: _pages.elementAt(_selectedIndex).appBarActions,
-          ),
-          bottomNavigationBar: BottomNavigationBar(
-            key: navigationBarKey,
-            items: _pages
-                .map((page) =>
-                    BottomNavigationBarItem(icon: page.icon, label: page.title))
-                .toList(),
-            currentIndex: _selectedIndex,
-            type: BottomNavigationBarType.fixed,
-            selectedItemColor: MyTheme.accent, //
-            unselectedItemColor: MyTheme.darkGray,
-            onTap: (index) => setState(() {
-              // close chat overlay when go chat page
-              if (_selectedIndex != index) {
-                _selectedIndex = index;
-                if (isChatPageCurrentTab) {
-                  gFFI.chatModel.hideChatIconOverlay();
-                  gFFI.chatModel.hideChatWindowOverlay();
-                  gFFI.chatModel.mobileClearClientUnread(
-                      gFFI.chatModel.currentKey.connId);
-                }
-              }
-            }),
+            actions: [
+              PopupMenuButton<String>(
+                tooltip: "",
+                icon: const Icon(Icons.more_vert),
+                itemBuilder: (context) {
+                  return [
+                    PopupMenuItem(
+                      value: "settings",
+                      child: Text(translate("Settings")),
+                    ),
+                  ];
+                },
+                onSelected: (value) {
+                  if (value == "settings") {
+                    setState(() {
+                      _selectedIndex = _pages.length - 1; // 跳转到设置页面
+                    });
+                  }
+                },
+              ),
+            ],
           ),
           body: _pages.elementAt(_selectedIndex),
         ));

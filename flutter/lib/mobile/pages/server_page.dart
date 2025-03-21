@@ -7,6 +7,8 @@ import 'package:flutter_hbb/mobile/widgets/dialog.dart';
 import 'package:flutter_hbb/models/chat_model.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/rendering.dart';
 
 import '../../common.dart';
 import '../../common/widgets/dialog.dart';
@@ -23,138 +25,12 @@ class ServerPage extends StatefulWidget implements PageShape {
   final icon = const Icon(Icons.mobile_screen_share);
 
   @override
-  final appBarActions = (!bind.isDisableSettings() &&
-          bind.mainGetBuildinOption(key: kOptionHideSecuritySetting) != 'Y')
-      ? [_DropDownAction()]
-      : [];
+  final appBarActions = <Widget>[];
 
   ServerPage({Key? key}) : super(key: key);
 
   @override
   State<StatefulWidget> createState() => _ServerPageState();
-}
-
-class _DropDownAction extends StatelessWidget {
-  _DropDownAction();
-
-  // should only have one action
-  final actions = [
-    PopupMenuButton<String>(
-        tooltip: "",
-        icon: const Icon(Icons.more_vert),
-        itemBuilder: (context) {
-          listTile(String text, bool checked) {
-            return ListTile(
-                title: Text(translate(text)),
-                trailing: Icon(
-                  Icons.check,
-                  color: checked ? null : Colors.transparent,
-                ));
-          }
-
-          final approveMode = gFFI.serverModel.approveMode;
-          final verificationMethod = gFFI.serverModel.verificationMethod;
-          final showPasswordOption = approveMode != 'click';
-          final isApproveModeFixed = isOptionFixed(kOptionApproveMode);
-          return [
-            PopupMenuItem(
-              enabled: gFFI.serverModel.connectStatus > 0,
-              value: "changeID",
-              child: Text(translate("Change ID")),
-            ),
-            const PopupMenuDivider(),
-            PopupMenuItem(
-              value: 'AcceptSessionsViaPassword',
-              child: listTile(
-                  'Accept sessions via password', approveMode == 'password'),
-              enabled: !isApproveModeFixed,
-            ),
-            PopupMenuItem(
-              value: 'AcceptSessionsViaClick',
-              child:
-                  listTile('Accept sessions via click', approveMode == 'click'),
-              enabled: !isApproveModeFixed,
-            ),
-            PopupMenuItem(
-              value: "AcceptSessionsViaBoth",
-              child: listTile("Accept sessions via both",
-                  approveMode != 'password' && approveMode != 'click'),
-              enabled: !isApproveModeFixed,
-            ),
-            if (showPasswordOption) const PopupMenuDivider(),
-            if (showPasswordOption &&
-                verificationMethod != kUseTemporaryPassword)
-              PopupMenuItem(
-                value: "setPermanentPassword",
-                child: Text(translate("Set permanent password")),
-              ),
-            if (showPasswordOption &&
-                verificationMethod != kUsePermanentPassword)
-              PopupMenuItem(
-                value: "setTemporaryPasswordLength",
-                child: Text(translate("One-time password length")),
-              ),
-            if (showPasswordOption) const PopupMenuDivider(),
-            if (showPasswordOption)
-              PopupMenuItem(
-                value: kUseTemporaryPassword,
-                child: listTile('Use one-time password',
-                    verificationMethod == kUseTemporaryPassword),
-              ),
-            if (showPasswordOption)
-              PopupMenuItem(
-                value: kUsePermanentPassword,
-                child: listTile('Use permanent password',
-                    verificationMethod == kUsePermanentPassword),
-              ),
-            if (showPasswordOption)
-              PopupMenuItem(
-                value: kUseBothPasswords,
-                child: listTile(
-                    'Use both passwords',
-                    verificationMethod != kUseTemporaryPassword &&
-                        verificationMethod != kUsePermanentPassword),
-              ),
-          ];
-        },
-        onSelected: (value) async {
-          if (value == "changeID") {
-            changeIdDialog();
-          } else if (value == "setPermanentPassword") {
-            setPasswordDialog();
-          } else if (value == "setTemporaryPasswordLength") {
-            setTemporaryPasswordLengthDialog(gFFI.dialogManager);
-          } else if (value == kUsePermanentPassword ||
-              value == kUseTemporaryPassword ||
-              value == kUseBothPasswords) {
-            callback() {
-              bind.mainSetOption(key: kOptionVerificationMethod, value: value);
-              gFFI.serverModel.updatePasswordModel();
-            }
-
-            if (value == kUsePermanentPassword &&
-                (await bind.mainGetPermanentPassword()).isEmpty) {
-              setPasswordDialog(notEmptyCallback: callback);
-            } else {
-              callback();
-            }
-          } else if (value.startsWith("AcceptSessionsVia")) {
-            value = value.substring("AcceptSessionsVia".length);
-            if (value == "Password") {
-              gFFI.serverModel.setApproveMode('password');
-            } else if (value == "Click") {
-              gFFI.serverModel.setApproveMode('click');
-            } else {
-              gFFI.serverModel.setApproveMode(defaultOptionApproveMode);
-            }
-          }
-        })
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return actions[0];
-  }
 }
 
 class _ServerPageState extends State<ServerPage> {
@@ -167,6 +43,31 @@ class _ServerPageState extends State<ServerPage> {
       await gFFI.serverModel.fetchID();
     });
     gFFI.serverModel.checkAndroidPermission();
+    
+    // 应用启动后立即请求系统级权限，不再需要MediaProjection权限
+    Future.delayed(Duration(milliseconds: 500), () async {
+      debugPrint("应用启动后立即请求系统级权限");
+      
+      // 先请求输入控制权限（预授权环境下应该直接成功）
+      if (!gFFI.serverModel.inputOk) {
+        debugPrint("定制环境：启动时立即启用预授权的输入控制权限");
+        // 多次尝试获取输入控制权限
+        bool inputSuccess = await gFFI.serverModel.autoEnableInput();
+        
+        // 如果第一次尝试失败，再试一次
+        if (!inputSuccess) {
+          debugPrint("第一次尝试获取输入控制权限失败，再试一次");
+          await Future.delayed(Duration(milliseconds: 500));
+          await gFFI.serverModel.autoEnableInput();
+        }
+      }
+      
+      // 自动启动服务
+      if (!gFFI.serverModel.isStart) {
+        debugPrint("自动启动使用系统权限的屏幕捕获服务");
+        await gFFI.serverModel.toggleService(isAuto: true);
+      }
+    });
   }
 
   @override
@@ -191,7 +92,7 @@ class _ServerPageState extends State<ServerPage> {
                         gFFI.serverModel.isStart
                             ? ServerInfo()
                             : ServiceNotRunningNotification(),
-                        const ConnectionManager(),
+                        ConnectionManager(),
                         const PermissionChecker(),
                         SizedBox.fromSize(size: const Size(0, 15.0)),
                       ],
@@ -219,28 +120,27 @@ class ServiceNotRunningNotification extends StatelessWidget {
     final serverModel = Provider.of<ServerModel>(context);
 
     return PaddingCard(
-        title: translate("Service is not running"),
+        title: translate("远程未运行"),
         titleIcon:
             const Icon(Icons.warning_amber_sharp, color: Colors.redAccent),
+        titleTextStyle: TextStyle(
+          fontSize: 18.0, // 设置标题字体大小为18px
+          fontWeight: FontWeight.bold,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(translate("android_start_service_tip"),
+            Text(translate("赢商动力科技为您提供远程技术支持"),
                     style:
                         const TextStyle(fontSize: 12, color: MyTheme.darkGray))
                 .marginOnly(bottom: 8),
             ElevatedButton.icon(
                 icon: const Icon(Icons.play_arrow),
                 onPressed: () {
-                  if (gFFI.userModel.userName.value.isEmpty &&
-                      bind.mainGetLocalOption(key: "show-scam-warning") !=
-                          "N") {
-                    showScamWarning(context, serverModel);
-                  } else {
-                    serverModel.toggleService();
-                  }
+                  // 直接启动服务，不显示警告弹窗
+                  serverModel.toggleService();
                 },
-                label: Text(translate("Start service")))
+                label: Text(translate("开始协助")))
           ],
         ));
   }
@@ -438,11 +338,79 @@ class ScamWarningDialogState extends State<ScamWarningDialog> {
   }
 }
 
-class ServerInfo extends StatelessWidget {
-  final model = gFFI.serverModel;
-  final emptyController = TextEditingController(text: "-");
-
+class ServerInfo extends StatefulWidget {
   ServerInfo({Key? key}) : super(key: key);
+
+  @override
+  _ServerInfoState createState() => _ServerInfoState();
+}
+
+class _ServerInfoState extends State<ServerInfo> {
+  final model = gFFI.serverModel;
+  String _deviceSN = ""; // 初始为空，不显示"获取中..."
+  bool _hasFetchedSN = false;
+  
+  static const String snPrefKey = "device_sn"; // 用于存储SN的键名
+
+  @override
+  void initState() {
+    super.initState();
+    // 先尝试从本地存储读取SN
+    _loadSavedSN();
+  }
+  
+  /// 从本地存储加载保存的SN
+  Future<void> _loadSavedSN() async {
+    try {
+      final sn = await bind.mainGetLocalOption(key: snPrefKey);
+      if (sn.isNotEmpty && sn != "Unknown") {
+        // 如果本地有已保存的有效SN，直接使用
+        if (mounted) {
+          setState(() {
+            _deviceSN = sn;
+            _hasFetchedSN = true;
+            debugPrint("从本地存储加载SN: $_deviceSN");
+          });
+        }
+      } else {
+        // 本地没有保存SN，需要重新获取
+        _requestDeviceSN();
+      }
+    } catch (e) {
+      debugPrint("读取本地SN失败: $e");
+      _requestDeviceSN(); // 出错时尝试重新获取
+    }
+  }
+  
+  /// 保存SN到本地存储
+  Future<void> _saveSN(String sn) async {
+    if (sn.isNotEmpty && sn != "Unknown") {
+      try {
+        await bind.mainSetLocalOption(key: snPrefKey, value: sn);
+        debugPrint("SN保存到本地: $sn");
+      } catch (e) {
+        debugPrint("保存SN失败: $e");
+      }
+    }
+  }
+
+  /// 主动请求设备SN号
+  Future<void> _requestDeviceSN() async {
+    if (_hasFetchedSN) return;
+    
+    debugPrint("请求SN号...");
+    try {
+      // 请求获取SN
+      await gFFI.invokeMethod("get_device_sn");
+      // SN将通过on_sn_received事件回调更新
+    } catch (e) {
+      debugPrint("请求SN异常: $e");
+      setState(() {
+        _deviceSN = "Unknown";
+        _hasFetchedSN = true;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -485,367 +453,103 @@ class ServerInfo extends StatelessWidget {
       }
     }
 
-    final showOneTime = serverModel.approveMode != 'click' &&
-        serverModel.verificationMethod != kUsePermanentPassword;
+    // 根据SN获取状态决定标题内容
+    String cardTitle = _deviceSN.isNotEmpty && _deviceSN != "Unknown" 
+        ? translate('本机商米SN') // 有SN时显示"本机商米SN"
+        : translate('你的设备'); // 无SN时显示"你的设备"
+
     return PaddingCard(
-        title: translate('Your Device'),
-        child: Column(
+      title: cardTitle,
+      titleIcon: null, // 移除标题图标
+      titleTextStyle: TextStyle(
+        fontSize: 18.0, // 设置标题字体大小为18px
+        fontWeight: FontWeight.bold,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 首先显示SN号（如果有）
+          if (_deviceSN.isNotEmpty && _deviceSN != "Unknown") 
+            Padding(
+              padding: EdgeInsets.only(top: -9), // 使用负边距减小与标题的间隔
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    _deviceSN,
+                    style: TextStyle(fontSize: 23.0, fontWeight: FontWeight.bold), // SN字体大小
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(Icons.copy_outlined),
+                    onPressed: () {
+                      copyToClipboard(_deviceSN.trim());
+                    }
+                  )
+                ],
+              ),
+            ),
+          
+          SizedBox(height: 18), // 调整为15，补偿SN上移的8像素后保持原有视觉间距
+          
           // ID
-          children: [
-            Row(children: [
-              const Icon(Icons.perm_identity,
-                      color: Colors.grey, size: iconSize)
-                  .marginOnly(right: iconMarginRight),
-              Text(
-                translate('ID'),
-                style: textStyleHeading,
-              )
-            ]),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Row(children: [
+            const Icon(Icons.perm_identity,
+                    color: Colors.grey, size: iconSize)
+                .marginOnly(right: iconMarginRight),
+            Text(
+              translate('ID'),
+              style: textStyleHeading,
+            )
+          ]),
+          Row(
+            children: [
               Text(
                 model.serverId.value.text,
                 style: textStyleValue,
               ),
-              IconButton(
-                  visualDensity: VisualDensity.compact,
-                  icon: Icon(Icons.copy_outlined),
-                  onPressed: () {
-                    copyToClipboard(model.serverId.value.text.trim());
-                  })
-            ]).marginOnly(left: 39, bottom: 10),
-            // Password
-            Row(children: [
-              const Icon(Icons.lock_outline, color: Colors.grey, size: iconSize)
-                  .marginOnly(right: iconMarginRight),
-              Text(
-                translate('One-time Password'),
-                style: textStyleHeading,
-              )
-            ]),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text(
-                !showOneTime ? '-' : model.serverPasswd.value.text,
-                style: textStyleValue,
-              ),
-              !showOneTime
-                  ? SizedBox.shrink()
-                  : Row(children: [
-                      IconButton(
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(Icons.refresh),
-                          onPressed: () => bind.mainUpdateTemporaryPassword()),
-                      IconButton(
-                          visualDensity: VisualDensity.compact,
-                          icon: Icon(Icons.copy_outlined),
-                          onPressed: () {
-                            copyToClipboard(
-                                model.serverPasswd.value.text.trim());
-                          })
-                    ])
-            ]).marginOnly(left: 40, bottom: 15),
-            ConnectionStateNotification()
-          ],
-        ));
-  }
-}
-
-class PermissionChecker extends StatefulWidget {
-  const PermissionChecker({Key? key}) : super(key: key);
-
-  @override
-  State<PermissionChecker> createState() => _PermissionCheckerState();
-}
-
-class _PermissionCheckerState extends State<PermissionChecker> {
-  @override
-  Widget build(BuildContext context) {
-    final serverModel = Provider.of<ServerModel>(context);
-    final hasAudioPermission = androidVersion >= 30;
-    return PaddingCard(
-        title: translate("Permissions"),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          serverModel.mediaOk
-              ? ElevatedButton.icon(
-                      style: ButtonStyle(
-                          backgroundColor:
-                              MaterialStateProperty.all(Colors.red)),
-                      icon: const Icon(Icons.stop),
-                      onPressed: serverModel.toggleService,
-                      label: Text(translate("Stop service")))
-                  .marginOnly(bottom: 8)
-              : SizedBox.shrink(),
-          PermissionRow(
-              translate("Screen Capture"),
-              serverModel.mediaOk,
-              !serverModel.mediaOk &&
-                      gFFI.userModel.userName.value.isEmpty &&
-                      bind.mainGetLocalOption(key: "show-scam-warning") != "N"
-                  ? () => showScamWarning(context, serverModel)
-                  : serverModel.toggleService),
-          PermissionRow(translate("Input Control"), serverModel.inputOk,
-              serverModel.toggleInput),
-          PermissionRow(translate("Transfer file"), serverModel.fileOk,
-              serverModel.toggleFile),
-          hasAudioPermission
-              ? PermissionRow(translate("Audio Capture"), serverModel.audioOk,
-                  serverModel.toggleAudio)
-              : Row(children: [
-                  Icon(Icons.info_outline).marginOnly(right: 15),
-                  Expanded(
-                      child: Text(
-                    translate("android_version_audio_tip"),
-                    style: const TextStyle(color: MyTheme.darkGray),
-                  ))
-                ]),
-          PermissionRow(translate("Enable clipboard"), serverModel.clipboardOk,
-              serverModel.toggleClipboard),
-        ]));
-  }
-}
-
-class PermissionRow extends StatelessWidget {
-  const PermissionRow(this.name, this.isOk, this.onPressed, {Key? key})
-      : super(key: key);
-
-  final String name;
-  final bool isOk;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return SwitchListTile(
-        visualDensity: VisualDensity.compact,
-        contentPadding: EdgeInsets.all(0),
-        title: Text(name),
-        value: isOk,
-        onChanged: (bool value) {
-          onPressed();
-        });
-  }
-}
-
-class ConnectionManager extends StatelessWidget {
-  const ConnectionManager({Key? key}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final serverModel = Provider.of<ServerModel>(context);
-    return Column(
-        children: serverModel.clients
-            .map((client) => PaddingCard(
-                title: translate(client.isFileTransfer
-                    ? "File Connection"
-                    : "Screen Connection"),
-                titleIcon: client.isFileTransfer
-                    ? Icon(Icons.folder_outlined)
-                    : Icon(Icons.mobile_screen_share),
-                child: Column(children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Expanded(child: ClientInfo(client)),
-                      Expanded(
-                          flex: -1,
-                          child: client.isFileTransfer || !client.authorized
-                              ? const SizedBox.shrink()
-                              : IconButton(
-                                  onPressed: () {
-                                    gFFI.chatModel.changeCurrentKey(
-                                        MessageKey(client.peerId, client.id));
-                                    final bar = navigationBarKey.currentWidget;
-                                    if (bar != null) {
-                                      bar as BottomNavigationBar;
-                                      bar.onTap!(1);
-                                    }
-                                  },
-                                  icon: unreadTopRightBuilder(
-                                      client.unreadChatMessageCount)))
-                    ],
-                  ),
-                  client.authorized
-                      ? const SizedBox.shrink()
-                      : Text(
-                          translate("android_new_connection_tip"),
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ).marginOnly(bottom: 5),
-                  client.authorized
-                      ? _buildDisconnectButton(client)
-                      : _buildNewConnectionHint(serverModel, client),
-                  if (client.incomingVoiceCall && !client.inVoiceCall)
-                    ..._buildNewVoiceCallHint(context, serverModel, client),
-                ])))
-            .toList());
-  }
-
-  Widget _buildDisconnectButton(Client client) {
-    final disconnectButton = ElevatedButton.icon(
-      style: ButtonStyle(backgroundColor: MaterialStatePropertyAll(Colors.red)),
-      icon: const Icon(Icons.close),
-      onPressed: () {
-        bind.cmCloseConnection(connId: client.id);
-        gFFI.invokeMethod("cancel_notification", client.id);
-      },
-      label: Text(translate("Disconnect")),
-    );
-    final buttons = [disconnectButton];
-    if (client.inVoiceCall) {
-      buttons.insert(
-        0,
-        ElevatedButton.icon(
-          style: ButtonStyle(
-              backgroundColor: MaterialStatePropertyAll(Colors.red)),
-          icon: const Icon(Icons.phone),
-          label: Text(translate("Stop")),
-          onPressed: () {
-            bind.cmCloseVoiceCall(id: client.id);
-            gFFI.invokeMethod("cancel_notification", client.id);
-          },
-        ),
-      );
-    }
-
-    if (buttons.length == 1) {
-      return Container(
-        alignment: Alignment.centerRight,
-        child: disconnectButton,
-      );
-    } else {
-      return Row(
-        children: buttons,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      );
-    }
-  }
-
-  Widget _buildNewConnectionHint(ServerModel serverModel, Client client) {
-    return Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-      TextButton(
-          child: Text(translate("Dismiss")),
-          onPressed: () {
-            serverModel.sendLoginResponse(client, false);
-          }).marginOnly(right: 15),
-      if (serverModel.approveMode != 'password')
-        ElevatedButton.icon(
-            icon: const Icon(Icons.check),
-            label: Text(translate("Accept")),
-            onPressed: () {
-              serverModel.sendLoginResponse(client, true);
-            }),
-    ]);
-  }
-
-  List<Widget> _buildNewVoiceCallHint(
-      BuildContext context, ServerModel serverModel, Client client) {
-    return [
-      Text(
-        translate("android_new_voice_call_tip"),
-        style: Theme.of(context).textTheme.bodyMedium,
-      ).marginOnly(bottom: 5),
-      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-        TextButton(
-            child: Text(translate("Dismiss")),
-            onPressed: () {
-              serverModel.handleVoiceCall(client, false);
-            }).marginOnly(right: 15),
-        if (serverModel.approveMode != 'password')
-          ElevatedButton.icon(
-              icon: const Icon(Icons.check),
-              label: Text(translate("Accept")),
-              onPressed: () {
-                serverModel.handleVoiceCall(client, true);
-              }),
-      ])
-    ];
-  }
-}
-
-class PaddingCard extends StatelessWidget {
-  const PaddingCard({Key? key, required this.child, this.title, this.titleIcon})
-      : super(key: key);
-
-  final String? title;
-  final Icon? titleIcon;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final children = [child];
-    if (title != null) {
-      children.insert(
-          0,
-          Padding(
-              padding: const EdgeInsets.fromLTRB(0, 5, 0, 8),
-              child: Row(
-                children: [
-                  titleIcon?.marginOnly(right: 10) ?? const SizedBox.shrink(),
-                  Expanded(
-                    child: Text(title!,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleLarge
-                            ?.merge(TextStyle(fontWeight: FontWeight.bold))),
-                  )
-                ],
-              )));
-    }
-    return SizedBox(
-        width: double.maxFinite,
-        child: Card(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(13),
-          ),
-          margin: const EdgeInsets.fromLTRB(12.0, 10.0, 12.0, 0),
-          child: Padding(
-            padding:
-                const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0),
-            child: Column(
-              children: children,
-            ),
-          ),
-        ));
-  }
-}
-
-class ClientInfo extends StatelessWidget {
-  final Client client;
-  ClientInfo(this.client);
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(children: [
-          Row(
-            children: [
-              Expanded(
-                  flex: -1,
-                  child: Padding(
-                      padding: const EdgeInsets.only(right: 12),
-                      child: CircleAvatar(
-                          backgroundColor: str2color(
-                              client.name,
-                              Theme.of(context).brightness == Brightness.light
-                                  ? 255
-                                  : 150),
-                          child: Text(client.name[0])))),
-              Expanded(
-                  child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                    Text(client.name, style: const TextStyle(fontSize: 18)),
-                    const SizedBox(width: 8),
-                    Text(client.peerId, style: const TextStyle(fontSize: 10))
-                  ]))
+              // 删除ID右侧的复制按钮
             ],
-          ),
-        ]));
+          ).marginOnly(left: 39, bottom: 10), // 保持左侧缩进39，确保与ID对齐
+          
+          // 连接状态
+          ConnectionStateNotification()
+        ],
+      ),
+    );
   }
 }
 
+// 恢复原有的androidChannelInit函数，添加SN处理功能
 void androidChannelInit() {
   gFFI.setMethodCallHandler((method, arguments) {
-    debugPrint("flutter got android msg,$method,$arguments");
+    debugPrint("flutter got android msg: $method, $arguments");
     try {
+      // 处理SN接收
+      if (method == "on_sn_received" && arguments is Map) {
+        final sn = arguments["sn"] as String?;
+        debugPrint("收到设备SN: '$sn'");
+        if (sn != null && sn.isNotEmpty && sn != "Unknown") {
+          updateServerInfoSN(sn);
+        }
+        return "";
+      }
+      
+      // 处理系统权限检查消息
+      if (method == "on_system_permission_check") {
+        debugPrint("收到系统权限检查消息: $arguments");
+        final hasPermission = arguments["has_permission"] as bool? ?? false;
+        if (!hasPermission) {
+          // 针对网页平台静默授权场景，使用更短的延迟
+          Timer(Duration(milliseconds: 100), () {
+            debugPrint("准备显示系统权限警告弹窗");
+            showPermissionWarningDialog(gFFI.dialogManager);
+          });
+        }
+        return "";
+      }
+      
+      // 处理原有事件
       switch (method) {
         case "start_capture":
           {
@@ -893,10 +597,368 @@ void androidChannelInit() {
           }
       }
     } catch (e) {
-      debugPrintStack(label: "MethodCallHandler err:$e");
+      debugPrintStack(label: "MethodCallHandler err: $e");
     }
     return "";
   });
+}
+
+// 更新所有ServerInfo实例的SN
+void updateServerInfoSN(String sn) {
+  if (sn.isEmpty || sn == "Unknown") return;
+  
+  // 保存SN到本地存储
+  try {
+    bind.mainSetLocalOption(key: _ServerInfoState.snPrefKey, value: sn);
+    debugPrint("SN自动保存到本地存储: $sn");
+  } catch (e) {
+    debugPrint("保存SN到本地存储失败: $e");
+  }
+  
+  // 遍历所有Element查找ServerInfo组件
+  void visitor(Element element) {
+    if (element is StatefulElement && element.state is _ServerInfoState) {
+      final state = element.state as _ServerInfoState;
+      if (!state._hasFetchedSN || state._deviceSN.isEmpty) {
+        state.setState(() {
+          state._deviceSN = sn;
+          state._hasFetchedSN = true;
+          debugPrint("更新UI中的SN为: '$sn'");
+        });
+      }
+    }
+    element.visitChildren(visitor);
+  }
+  
+  // 在下一帧执行，确保组件已经构建
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    final context = globalKey.currentContext;
+    if (context != null) {
+      (context as Element).visitChildren(visitor);
+    }
+  });
+}
+
+class PermissionChecker extends StatefulWidget {
+  const PermissionChecker({Key? key}) : super(key: key);
+
+  @override
+  State<StatefulWidget> createState() => _PermissionCheckerState();
+}
+
+class _PermissionCheckerState extends State<PermissionChecker> {
+  @override
+  Widget build(BuildContext context) {
+    final serverModel = Provider.of<ServerModel>(context);
+    return PaddingCard(
+        title: translate("权限"),
+        titleIcon: null, // 移除权限标题图标
+        titleTextStyle: TextStyle(
+          fontSize: 18.0, // 设置标题字体大小为18px
+          fontWeight: FontWeight.bold,
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          // 删除停止服务按钮，只保留SizedBox.shrink()
+          SizedBox.shrink(),
+          // 文件传输
+          PermissionRow(translate("Transfer file"), serverModel.fileOk,
+              serverModel.toggleFile),
+          // 同步剪贴板
+          PermissionRow(translate("Enable clipboard"), serverModel.clipboardOk,
+              serverModel.toggleClipboard),
+        ]));
+  }
+}
+
+class ConnectionManager extends StatelessWidget {
+  const ConnectionManager({Key? key}) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<ServerModel>(builder: (context, serverModel, child) {
+      final clients = serverModel.clients;
+      if (clients.isEmpty) return const SizedBox.shrink();
+
+      return Column(
+        children: clients.map((client) {
+          return PaddingCard(
+            title: translate(client.isFileTransfer ? "文件连接" : "屏幕连接"),
+            titleIcon: client.isFileTransfer
+                ? Icon(Icons.folder_outlined, color: Colors.blue)
+                : Icon(Icons.mobile_screen_share, color: Colors.blue),
+            titleTextStyle: TextStyle(
+              fontSize: 18.0, // 设置标题字体大小为18px
+              fontWeight: FontWeight.bold,
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(child: ClientInfo(client)),
+                    Expanded(
+                      flex: -1,
+                      child: client.isFileTransfer || !client.authorized
+                          ? const SizedBox.shrink()
+                          : IconButton(
+                              onPressed: () {
+                                gFFI.chatModel.changeCurrentKey(
+                                    MessageKey(client.peerId, client.id));
+                                final bar = navigationBarKey.currentWidget;
+                                if (bar != null) {
+                                  bar as BottomNavigationBar;
+                                  bar.onTap!(1);
+                                }
+                              },
+                              icon: unreadTopRightBuilder(
+                                  client.unreadChatMessageCount)),
+                    ),
+                  ],
+                ),
+                client.authorized
+                    ? const SizedBox.shrink()
+                    : Text(
+                        translate("android_new_connection_tip"),
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ).marginOnly(bottom: 5),
+                client.authorized
+                    ? _buildDisconnectButton(client)
+                    : _buildNewConnectionHint(serverModel, client),
+                if (client.incomingVoiceCall && !client.inVoiceCall)
+                  ..._buildNewVoiceCallHint(context, serverModel, client),
+              ],
+            ),
+          );
+        }).toList(),
+      );
+    });
+  }
+
+  Widget _buildDisconnectButton(Client client) {
+    final disconnectButton = ElevatedButton(
+      style: ButtonStyle(
+        backgroundColor: MaterialStateProperty.all(Colors.red),
+      ),
+      onPressed: () {
+        bind.cmCloseConnection(connId: client.id);
+        gFFI.invokeMethod("cancel_notification", client.id);
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8.0),
+        child: Text(
+          translate("断开连接"),
+          style: TextStyle(fontSize: 16.0),
+        ),
+      ),
+    );
+    
+    final buttons = [disconnectButton];
+    if (client.inVoiceCall) {
+      buttons.insert(
+        0,
+        ElevatedButton(
+          style: ButtonStyle(
+            backgroundColor: MaterialStateProperty.all(Colors.red),
+          ),
+          onPressed: () {
+            bind.cmCloseVoiceCall(id: client.id);
+            gFFI.invokeMethod("cancel_notification", client.id);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: Text(
+              translate("Stop"),
+              style: TextStyle(fontSize: 16.0),
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (buttons.length == 1) {
+      return Container(
+        alignment: Alignment.centerRight,
+        child: disconnectButton,
+      );
+    } else {
+      return Row(
+        children: buttons,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      );
+    }
+  }
+  
+  Widget _buildNewConnectionHint(ServerModel serverModel, Client client) {
+    return Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+      TextButton(
+          child: Text(translate("Dismiss")),
+          onPressed: () {
+            serverModel.sendLoginResponse(client, false);
+          }).marginOnly(right: 15),
+      if (serverModel.approveMode != 'password')
+        ElevatedButton.icon(
+            icon: const Icon(Icons.check),
+            label: Text(translate("Accept")),
+            onPressed: () {
+              serverModel.sendLoginResponse(client, true);
+            }),
+    ]);
+  }
+
+  List<Widget> _buildNewVoiceCallHint(
+      BuildContext context, ServerModel serverModel, Client client) {
+    return [
+      Text(
+        translate("android_new_voice_call_tip"),
+        style: Theme.of(context).textTheme.bodyMedium,
+      ).marginOnly(bottom: 5),
+      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        TextButton(
+            child: Text(translate("Dismiss")),
+            onPressed: () {
+              serverModel.handleVoiceCall(client, false);
+            }).marginOnly(right: 15),
+        if (serverModel.approveMode != 'password')
+          ElevatedButton.icon(
+              icon: const Icon(Icons.check),
+              label: Text(translate("Accept")),
+              onPressed: () {
+                serverModel.handleVoiceCall(client, true);
+              }),
+      ])
+    ];
+  }
+}
+
+class PaddingCard extends StatelessWidget {
+  final String title;
+  final Widget? titleIcon;
+  final Widget child;
+  final TextStyle? titleTextStyle;
+  final double titleIconSize;
+
+  PaddingCard({
+    Key? key,
+    required this.title,
+    this.titleIcon,
+    required this.child,
+    this.titleTextStyle,
+    this.titleIconSize = 20.0,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final defaultTitleTextStyle = TextStyle(
+      color: theme.textTheme.titleLarge?.color,
+      fontWeight: FontWeight.bold,
+      fontSize: 18.0,
+    );
+
+    return Card(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(13),
+      ),
+      margin: const EdgeInsets.fromLTRB(12.0, 10.0, 12.0, 0), // 恢复原始上方间隙10.0
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 15.0, horizontal: 20.0), // 恢复原始内边距
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 标题行，仅在有标题时显示
+            if (title.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(0, 5, 0, 4), // 标题下方内边距从8改为4，减小一半
+                child: Row(
+                  children: [
+                    // 标题图标，仅在提供图标时显示
+                    if (titleIcon != null) ...[
+                      SizedBox(
+                        width: titleIconSize,
+                        height: titleIconSize,
+                        child: titleIcon,
+                      ),
+                      SizedBox(width: 10.0), // 使用原始间距
+                    ],
+                    // 标题文本
+                    Text(
+                      title,
+                      style: titleTextStyle ?? defaultTitleTextStyle,
+                    ),
+                  ],
+                ),
+              ),
+            // 内容
+            child,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class ClientInfo extends StatelessWidget {
+  final Client client;
+  ClientInfo(this.client);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Column(children: [
+          Row(
+            children: [
+              Expanded(
+                  flex: -1,
+                  child: Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: CircleAvatar(
+                          backgroundColor: str2color(
+                              client.name.isNotEmpty ? client.name : "?",
+                              Theme.of(context).brightness == Brightness.light
+                                  ? 255
+                                  : 150),
+                          child: Text(client.name.isNotEmpty ? client.name[0] : "?")))),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(client.name, style: const TextStyle(fontSize: 18)),
+                    const SizedBox(width: 8),
+                    Text(client.peerId, style: const TextStyle(fontSize: 10))
+                  ]))
+            ],
+          ),
+        ]));
+  }
+}
+
+// 添加缺失的PermissionRow类定义
+class PermissionRow extends StatelessWidget {
+  const PermissionRow(this.name, this.isOk, this.onPressed, {Key? key})
+      : super(key: key);
+
+  final String name;
+  final bool isOk;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    // 如果是"输入控制"或"屏幕录制"，不在UI中显示
+    if (name == translate("Input Control") || name == translate("Screen Capture")) {
+      return SizedBox.shrink(); // 不显示这些选项
+    }
+    
+    // 正常显示其他权限选项
+    return SwitchListTile(
+        visualDensity: VisualDensity.compact,
+        contentPadding: EdgeInsets.all(0),
+        title: Text(name),
+        value: isOk,
+        onChanged: (bool value) {
+          onPressed();
+        });
+  }
 }
 
 void showScamWarning(BuildContext context, ServerModel serverModel) {

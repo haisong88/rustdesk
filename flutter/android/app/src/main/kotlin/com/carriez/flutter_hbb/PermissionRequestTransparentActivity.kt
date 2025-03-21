@@ -7,48 +7,21 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 
+// 简化版PermissionRequestTransparentActivity，仅保留基本结构
 class PermissionRequestTransparentActivity: Activity() {
     private val logTag = "permissionRequest"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.d(logTag, "onCreate PermissionRequestTransparentActivity: intent.action: ${intent.action}")
-
-        when (intent.action) {
-            ACT_REQUEST_MEDIA_PROJECTION -> {
-                val mediaProjectionManager =
-                    getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                val intent = mediaProjectionManager.createScreenCaptureIntent()
-                startActivityForResult(intent, REQ_REQUEST_MEDIA_PROJECTION)
-            }
-            else -> finish()
-        }
+        
+        // 在定制系统中，直接使用系统级权限，关闭此Activity
+        finish()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQ_REQUEST_MEDIA_PROJECTION) {
-            if (resultCode == RESULT_OK && data != null) {
-                launchService(data)
-            } else {
-                setResult(RES_FAILED)
-            }
-        }
-
+        // 已经没有需要处理的权限请求
         finish()
     }
-
-    private fun launchService(mediaProjectionResultIntent: Intent) {
-        Log.d(logTag, "Launch MainService")
-        val serviceIntent = Intent(this, MainService::class.java)
-        serviceIntent.action = ACT_INIT_MEDIA_PROJECTION_AND_SERVICE
-        serviceIntent.putExtra(EXT_MEDIA_PROJECTION_RES_INTENT, mediaProjectionResultIntent)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
-    }
-
 }

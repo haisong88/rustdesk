@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -95,6 +96,10 @@ class _RawTouchGestureDetectorRegionState
   bool _touchModePanStarted = false;
   Offset _doubleFinerTapPosition = Offset.zero;
 
+  // 添加防重复触发变量
+  bool _isTapHandled = false;
+  DateTime _lastTapTime = DateTime.now();
+
   FFI get ffi => widget.ffi;
   FfiModel get ffiModel => widget.ffiModel;
   InputModel get inputModel => widget.inputModel;
@@ -114,6 +119,14 @@ class _RawTouchGestureDetectorRegionState
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
     }
+    // 重置点击处理状态
+    _isTapHandled = false;
+    
+    // 添加调试日志
+    if (isMobile && ffiModel.isPeerAndroid) {
+      debugPrint("[移动-安卓控制] 触发onTapDown事件: ${d.localPosition}");
+    }
+    
     if (handleTouch) {
       _lastPosOfDoubleTapDown = d.localPosition;
       // Desktop or mobile "Touch mode"
@@ -127,7 +140,22 @@ class _RawTouchGestureDetectorRegionState
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
     }
+    
+    // 检查是否是移动设备控制安卓端的情况
+    bool isMobileToAndroid = isMobile && ffiModel.isPeerAndroid;
+    
+    // 添加调试日志
+    if (isMobileToAndroid) {
+      debugPrint("[移动-安卓控制] 触发onTapUp事件: ${d.localPosition}, 处理状态:${_isTapHandled}");
+    }
+    
     if (handleTouch) {
+      // 避免短时间内多次处理同一个点击
+      if (_isTapHandled) {
+        debugPrint("[移动-安卓控制] 跳过重复的onTapUp事件");
+        return;
+      }
+      
       final isMoved =
           await ffi.cursorModel.move(d.localPosition.dx, d.localPosition.dy);
       if (isMoved) {
@@ -135,6 +163,17 @@ class _RawTouchGestureDetectorRegionState
           await inputModel.tapDown(MouseButtons.left);
         }
         await inputModel.tapUp(MouseButtons.left);
+        
+        // 标记点击已处理
+        _isTapHandled = true;
+        
+        // 如果是移动设备控制安卓，延长防重复时间
+        if (isMobileToAndroid) {
+          // 延迟清除状态，防止onTap又触发一次
+          Future.delayed(Duration(milliseconds: 500), () {
+            _isTapHandled = false;
+          });
+        }
       }
     }
   }
@@ -143,9 +182,43 @@ class _RawTouchGestureDetectorRegionState
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
     }
+    
+    // 检查是否是移动设备控制安卓端的情况
+    bool isMobileToAndroid = isMobile && ffiModel.isPeerAndroid;
+    
+    // 添加调试日志
+    if (isMobileToAndroid) {
+      debugPrint("[移动-安卓控制] 触发onTap事件，时间差: ${DateTime.now().difference(_lastTapTime).inMilliseconds}ms, 处理状态:${_isTapHandled}");
+    }
+    
+    // 防重复点击检查
+    DateTime now = DateTime.now();
+    if (now.difference(_lastTapTime).inMilliseconds < 300 || _isTapHandled) {
+      debugPrint("[移动-安卓控制] 跳过重复的onTap事件");
+      return;
+    }
+    _lastTapTime = now;
+    
     if (!handleTouch) {
       // Mobile, "Mouse mode"
-      await inputModel.tap(MouseButtons.left);
+      if (isMobileToAndroid) {
+        // 移动设备控制安卓时，仅在Mouse模式下才发送点击，Touch模式已经在onTapUp处理过了
+        if (!ffiModel.touchMode) {
+          debugPrint("[移动-安卓控制] 鼠标模式下发送点击");
+          await inputModel.tap(MouseButtons.left);
+          _isTapHandled = true;
+          // 延迟清除状态
+          Future.delayed(Duration(milliseconds: 500), () {
+            _isTapHandled = false;
+            debugPrint("[移动-安卓控制] 点击状态重置");
+          });
+        } else {
+          debugPrint("[移动-安卓控制] 触摸模式下跳过点击（已在onTapUp处理）");
+        }
+      } else {
+        // 其他平台组合，保持原有行为
+        await inputModel.tap(MouseButtons.left);
+      }
     }
   }
 
@@ -164,6 +237,23 @@ class _RawTouchGestureDetectorRegionState
     if (lastDeviceKind != PointerDeviceKind.touch) {
       return;
     }
+    
+    // 检查是否是移动设备控制安卓的情况
+    bool isMobileToAndroid = isMobile && ffiModel.isPeerAndroid;
+    
+    // 添加调试日志
+    if (isMobileToAndroid) {
+      debugPrint("[移动-安卓控制] 触发onDoubleTap事件");
+    }
+    
+    // 双击时，我们想确保这是真正的双击意图，而不是单击事件错误触发
+    if (isMobileToAndroid) {
+      // 在移动端控制安卓时，不处理双击，避免意外触发
+      // 双击的语义会被转换为两次单击来传递
+      debugPrint("[移动-安卓控制] 移动设备控制安卓时，跳过双击事件转发");
+      return;
+    }
+    
     if (ffiModel.touchMode && ffi.cursorModel.lastIsBlocked) {
       return;
     }
@@ -171,6 +261,8 @@ class _RawTouchGestureDetectorRegionState
         !ffi.cursorModel.isInRemoteRect(_lastPosOfDoubleTapDown)) {
       return;
     }
+    
+    // 对于非安卓目标，保持原有双击行为
     await inputModel.tap(MouseButtons.left);
     await inputModel.tap(MouseButtons.left);
   }
