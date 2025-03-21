@@ -1,3 +1,5 @@
 [submodule "libs/hbb_common"]
 	path = libs/hbb_common
-	url = https://github.com/WHSHZTXZNB2020/hbb_common.git
+	url = https://github.com/WHSHZTXZNB2020/hbb_commongit add .gitmodules libs/hbb_common
+git commit -m "重新配置子模块"
+git push
