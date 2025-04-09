@@ -30,6 +30,7 @@ import java.lang.Character
 import kotlin.math.abs
 import kotlin.math.max
 import hbb.MessageOuterClass.KeyEvent
+import hbb.MessageOuterClass.ControlKey
 import hbb.MessageOuterClass.KeyboardMode
 import kotlin.concurrent.thread
 import java.lang.reflect.Method
@@ -374,12 +375,92 @@ class InputService : Service {
         }
     }
 
+    // 处理控制键输入，如果处理了返回true，否则返回false
+    private fun handleControlKey(keyEvent: KeyEvent): Boolean {
+        if (keyEvent.hasControlKey()) {
+            val controlKey = keyEvent.getControlKey()
+            val action = if (keyEvent.getDown()) KeyEventAndroid.ACTION_DOWN else KeyEventAndroid.ACTION_UP
+            
+            // 特别处理常见的控制键
+            val keyCode = when (controlKey) {
+                // 基本导航键
+                ControlKey.Space -> KeyEventAndroid.KEYCODE_SPACE
+                ControlKey.Return -> KeyEventAndroid.KEYCODE_ENTER
+                ControlKey.Backspace -> KeyEventAndroid.KEYCODE_DEL
+                ControlKey.Delete -> KeyEventAndroid.KEYCODE_FORWARD_DEL
+                ControlKey.Tab -> KeyEventAndroid.KEYCODE_TAB
+                ControlKey.UpArrow -> KeyEventAndroid.KEYCODE_DPAD_UP
+                ControlKey.DownArrow -> KeyEventAndroid.KEYCODE_DPAD_DOWN
+                ControlKey.LeftArrow -> KeyEventAndroid.KEYCODE_DPAD_LEFT
+                ControlKey.RightArrow -> KeyEventAndroid.KEYCODE_DPAD_RIGHT
+                ControlKey.Home -> KeyEventAndroid.KEYCODE_MOVE_HOME
+                ControlKey.End -> KeyEventAndroid.KEYCODE_MOVE_END
+                ControlKey.PageUp -> KeyEventAndroid.KEYCODE_PAGE_UP
+                ControlKey.PageDown -> KeyEventAndroid.KEYCODE_PAGE_DOWN
+                
+                // 修饰键
+                ControlKey.Alt -> KeyEventAndroid.KEYCODE_ALT_LEFT
+                ControlKey.RAlt -> KeyEventAndroid.KEYCODE_ALT_RIGHT
+                ControlKey.Control -> KeyEventAndroid.KEYCODE_CTRL_LEFT
+                ControlKey.RControl -> KeyEventAndroid.KEYCODE_CTRL_RIGHT
+                ControlKey.Shift -> KeyEventAndroid.KEYCODE_SHIFT_LEFT
+                ControlKey.RShift -> KeyEventAndroid.KEYCODE_SHIFT_RIGHT
+                ControlKey.Meta -> KeyEventAndroid.KEYCODE_META_LEFT
+                ControlKey.RWin -> KeyEventAndroid.KEYCODE_META_RIGHT
+                
+                // 功能键
+                ControlKey.F1 -> KeyEventAndroid.KEYCODE_F1
+                ControlKey.F2 -> KeyEventAndroid.KEYCODE_F2
+                ControlKey.F3 -> KeyEventAndroid.KEYCODE_F3
+                ControlKey.F4 -> KeyEventAndroid.KEYCODE_F4
+                ControlKey.F5 -> KeyEventAndroid.KEYCODE_F5
+                ControlKey.F6 -> KeyEventAndroid.KEYCODE_F6
+                ControlKey.F7 -> KeyEventAndroid.KEYCODE_F7
+                ControlKey.F8 -> KeyEventAndroid.KEYCODE_F8
+                ControlKey.F9 -> KeyEventAndroid.KEYCODE_F9
+                ControlKey.F10 -> KeyEventAndroid.KEYCODE_F10
+                ControlKey.F11 -> KeyEventAndroid.KEYCODE_F11
+                ControlKey.F12 -> KeyEventAndroid.KEYCODE_F12
+                
+                // 其他常用键
+                ControlKey.Escape -> KeyEventAndroid.KEYCODE_ESCAPE
+                ControlKey.Insert -> KeyEventAndroid.KEYCODE_INSERT
+                ControlKey.CapsLock -> KeyEventAndroid.KEYCODE_CAPS_LOCK
+                ControlKey.NumLock -> KeyEventAndroid.KEYCODE_NUM_LOCK
+                ControlKey.Scroll -> KeyEventAndroid.KEYCODE_SCROLL_LOCK
+                ControlKey.Print -> KeyEventAndroid.KEYCODE_SYSRQ
+                ControlKey.Pause -> KeyEventAndroid.KEYCODE_BREAK
+                
+                // 媒体控制键
+                ControlKey.VolumeMute -> KeyEventAndroid.KEYCODE_VOLUME_MUTE
+                ControlKey.VolumeDown -> KeyEventAndroid.KEYCODE_VOLUME_DOWN
+                ControlKey.VolumeUp -> KeyEventAndroid.KEYCODE_VOLUME_UP
+                
+                else -> 0 // 其他控制键暂不处理
+            }
+            
+            if (keyCode != 0) {
+                Log.d(logTag, "处理控制键: ${controlKey.name}, keyCode=$keyCode, action=${if(action == KeyEventAndroid.ACTION_DOWN) "DOWN" else "UP"}")
+                injectKeyEvent(keyCode, action)
+                return true
+            } else {
+                Log.d(logTag, "未处理的控制键: ${controlKey.name}")
+            }
+        }
+        return false
+    }
+
     fun onKeyEvent(input: ByteArray) {
         try {
             val keyEvent = KeyEvent.parseFrom(input)
             
             when (keyEvent.getMode().number) {
                 LEGACY_MODE -> {
+                    // 处理控制键输入
+                    if (handleControlKey(keyEvent)) {
+                        return
+                    }
+                    
                     // 使用getChr()方法获取键码
                     val keyCode = keyEvent.getChr()
                     val down = keyEvent.getDown()
@@ -401,6 +482,11 @@ class InputService : Service {
                     }
                 }
                 TRANSLATE_MODE -> {
+                    // 处理控制键输入
+                    if (handleControlKey(keyEvent)) {
+                        return
+                    }
+                    
                     // 处理文本输入
                     if (keyEvent.hasSeq() && keyEvent.getSeq().isNotEmpty()) {
                         injectText(keyEvent.getSeq())
@@ -417,6 +503,11 @@ class InputService : Service {
                     }
                 }
                 MAP_MODE -> {
+                    // 处理控制键输入
+                    if (handleControlKey(keyEvent)) {
+                        return
+                    }
+                    
                     // 处理文本输入
                     if (keyEvent.hasSeq() && keyEvent.getSeq().isNotEmpty()) {
                         injectText(keyEvent.getSeq())
@@ -586,6 +677,7 @@ class InputService : Service {
             val downTime = SystemClock.uptimeMillis()
             val eventTime = SystemClock.uptimeMillis()
             
+            // 创建KeyEvent
             val event = KeyEventAndroid(
                 downTime, eventTime, action, keyCode, 0, 0,
                 KeyEventAndroid.KEYCODE_UNKNOWN, 0, 0, InputDevice.SOURCE_KEYBOARD
@@ -593,11 +685,39 @@ class InputService : Service {
             
             val result = injectEvent(event)
             
-            // If this is a key down, automatically send a key up after a short delay
+            // 如果是按下事件，自动发送释放事件
             if (action == KeyEventAndroid.ACTION_DOWN) {
+                // 对于不同类型的按键，使用不同的延迟策略
+                // 导航键和功能键通常需要更短的延迟
+                val delay = when (keyCode) {
+                    // 对于导航键和编辑键，使用较短的延迟
+                    KeyEventAndroid.KEYCODE_DPAD_UP,
+                    KeyEventAndroid.KEYCODE_DPAD_DOWN,
+                    KeyEventAndroid.KEYCODE_DPAD_LEFT,
+                    KeyEventAndroid.KEYCODE_DPAD_RIGHT,
+                    KeyEventAndroid.KEYCODE_TAB,
+                    KeyEventAndroid.KEYCODE_SPACE,
+                    KeyEventAndroid.KEYCODE_ENTER,
+                    KeyEventAndroid.KEYCODE_DEL,
+                    KeyEventAndroid.KEYCODE_FORWARD_DEL -> 5L
+                    
+                    // 对于修饰键，使用较长的延迟，防止过早释放
+                    KeyEventAndroid.KEYCODE_SHIFT_LEFT,
+                    KeyEventAndroid.KEYCODE_SHIFT_RIGHT,
+                    KeyEventAndroid.KEYCODE_ALT_LEFT,
+                    KeyEventAndroid.KEYCODE_ALT_RIGHT,
+                    KeyEventAndroid.KEYCODE_CTRL_LEFT,
+                    KeyEventAndroid.KEYCODE_CTRL_RIGHT,
+                    KeyEventAndroid.KEYCODE_META_LEFT,
+                    KeyEventAndroid.KEYCODE_META_RIGHT -> 20L
+                    
+                    // 默认使用适中的延迟
+                    else -> 10L
+                }
+                
                 handler.postDelayed({
                     injectKeyEvent(keyCode, KeyEventAndroid.ACTION_UP)
-                }, 10)
+                }, delay)
             }
             
             return result
